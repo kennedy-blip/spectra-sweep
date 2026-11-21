@@ -86,9 +86,19 @@ describe('SPECTRA-SWEEP app shell', () => {
     expect(screen.getAllByText('PRO').length).toBeGreaterThanOrEqual(2);
   });
 
-  it('opens the APK distribution modal from the header', async () => {
+  it('one-tap download anchor points straight at the artifact', async () => {
     await boot();
-    const apkBtn = screen.getAllByRole('button').find((b) => b.getAttribute('aria-label') === 'Download Android APK');
+    // The header download control is an <a download>, not a button: tapping it
+    // must hand the browser the file directly, with no JS in the path.
+    const link = document.querySelector<HTMLAnchorElement>('a[download][href="/releases/spectrasweep-release.apk"]');
+    expect(link).toBeTruthy();
+    expect(link!.getAttribute('download')).toBe('SpectraSweep-Privacy-v1.0.0.apk');
+    expect(link!.getAttribute('aria-label')).toBe('Download Android APK');
+  });
+
+  it('opens the APK distribution modal from the build-details button', async () => {
+    await boot();
+    const apkBtn = screen.getAllByRole('button').find((b) => b.getAttribute('aria-label') === 'APK build details');
     expect(apkBtn).toBeTruthy();
     fireEvent.click(apkBtn!);
     await settle();

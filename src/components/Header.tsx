@@ -3,7 +3,6 @@ import {
   Activity,
   ChevronDown,
   Cpu,
-  Download,
   Fingerprint,
   Gauge,
   Lock,
@@ -23,6 +22,7 @@ import { useState } from 'react';
 import { ROLE_META, useApp } from '../state/store';
 import type { Role, ThemeKey } from '../types';
 import { SPRING } from './ui/Glass';
+import { ApkQrQuick } from './ApkQrQuick';
 
 const THEMES: { key: ThemeKey; label: string; Icon: typeof Sun; hint: string }[] = [
   { key: 'obsidian', label: 'Stealth Obsidian', Icon: Moon, hint: 'Default dark glass' },
@@ -300,21 +300,19 @@ export function Header({ onOpenApk }: { onOpenApk: () => void }) {
             </AnimatePresence>
           </div>
 
-          {/* ---------- APK ---------- */}
-          <motion.button
-            onClick={onOpenApk}
-            whileHover={{ scale: 1.03, y: -1 }}
-            whileTap={{ scale: 0.95 }}
-            transition={SPRING}
-            className="btn btn-accent !px-2.5 !py-1.5 text-[11px]"
-            aria-label="Download Android APK"
-          >
-            <Download size={14} />
-            <span className="hidden sm:inline">.APK</span>
-            <span className="absolute -right-0.5 -top-0.5 h-2 w-2">
-              <span className="absolute inset-0 rounded-full bg-emerald-400 soft-pulse" />
-            </span>
-          </motion.button>
+          {/* ---------- APK: one tap downloads, the info panel stays one
+               long-press (or the info icon in the modal) away ---------- */}
+          <div className="relative">
+            <ApkQrQuick />
+            <button
+              onClick={onOpenApk}
+              className="absolute -right-1 -top-1 grid h-3.5 w-3.5 place-items-center rounded-full border border-black/40 bg-emerald-400 text-[7px] font-black text-[#04120c]"
+              aria-label="APK build details"
+              title="Build details, SHA-256 and sideload guide"
+            >
+              i
+            </button>
+          </div>
 
           <button
             onClick={() => dispatch({ type: 'modal', modal: { type: 'privileges' } })}
