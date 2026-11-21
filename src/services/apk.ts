@@ -38,7 +38,7 @@ function crc32(bytes: Uint8Array): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-function zipStore(files: { name: string; data: Uint8Array }[]): Blob {
+function zipStore(files: { name: string; data: Uint8Array }[]): Uint8Array {
   const enc = new TextEncoder();
   const chunks: Uint8Array[] = [];
   const central: Uint8Array[] = [];
@@ -91,10 +91,30 @@ function zipStore(files: { name: string; data: Uint8Array }[]): Blob {
   ev.setUint32(12, cdSize, true);
   ev.setUint32(16, offset, true);
 
-  return new Blob([...chunks, ...central, end], { type: 'application/vnd.android.package-archive' });
+  const parts = [...chunks, ...central, end];
+  const total = parts.reduce((a, c) => a + c.length, 0);
+  const out = new Uint8Array(total);
+  let p = 0;
+  for (const part of parts) {
+    out.set(part, p);
+    p += part.length;
+  }
+  return out;
 }
 
-function buildFallbackPackage(): Blob {
+const APK_MIME = 'application/vnd.android.package-archive';
+
+/** Base64 without spreading large arrays into String.fromCharCode. */
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function buildFallbackPackage(): Uint8Array {
   const enc = new TextEncoder();
   const manifest = `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -124,22 +144,58 @@ permissions: camera, record_audio, vibrate
   ]);
 }
 
+/**
+ * Resolves a downloadable href for the fallback container.
+ *
+ * `URL.createObjectURL` is not available in every host (older Android
+ * WebViews, and jsdom under test), so we fall back to a base64 data URL
+ * rather than throwing. This is what keeps the download 404-free.
+ */
+function fallbackHref(bytes: Uint8Array): { href: string; revoke: (() => void) | null } {
+  if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    const url = URL.createObjectURL(new Blob([bytes], { type: APK_MIME }));
+    return {
+      href: url,
+      revoke: () => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {
+          /* already revoked */
+        }
+      },
+    };
+  }
+  return { href: `data:${APK_MIME};base64,${toBase64(bytes)}`, revoke: null };
+}
+
 export async function downloadApk(): Promise<{ mode: 'release' | 'fallback'; ok: boolean }> {
-  const hasRelease = await probe(APK_PATH);
-  const url = hasRelease ? APK_PATH : URL.createObjectURL(buildFallbackPackage());
+  let revoke: (() => void) | null = null;
+  let mode: 'release' | 'fallback' = 'fallback';
   try {
+    const hasRelease = await probe(APK_PATH);
+    mode = hasRelease ? 'release' : 'fallback';
+
+    let href = APK_PATH;
+    if (!hasRelease) {
+      const target = fallbackHref(buildFallbackPackage());
+      href = target.href;
+      revoke = target.revoke;
+    }
+
     const a = document.createElement('a');
-    a.href = url;
+    a.href = href;
     a.download = APK_FILENAME;
     a.rel = 'noopener';
     document.body.appendChild(a);
     a.click();
     a.remove();
-    return { mode: hasRelease ? 'release' : 'fallback', ok: true };
+    return { mode, ok: true };
   } catch {
-    return { mode: hasRelease ? 'release' : 'fallback', ok: false };
+    // Every failure mode is contained here: a missing artifact, a blocked
+    // anchor click or an unsupported URL API must never break the UI.
+    return { mode, ok: false };
   } finally {
-    if (!hasRelease) setTimeout(() => URL.revokeObjectURL(url), 8000);
+    if (revoke) setTimeout(revoke, 8000);
   }
 }
 

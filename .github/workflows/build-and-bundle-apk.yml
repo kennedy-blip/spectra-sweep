@@ -99,29 +99,21 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Align and publish the artifact
+      - name: Align, sign and publish the artifact
         id: artifact
+        env:
+          SPECTRA_STOREPASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SPECTRA_KEYALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           set -euo pipefail
           SRC=$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)
-          echo "Found APK: $SRC"
-          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
-          echo "Using build-tools: $BT"
-
-          mkdir -p public/releases
-          OUT=public/releases/spectrasweep-release.apk
-
-          "$BT/zipalign" -f -p 4 "$SRC" "$OUT"
-
-          # Gradle already signed it (release or debug config); re-verify so the
-          # checksum we publish is verifiably signed.
-          "$BT/apksigner" verify --print-certs "$OUT" | head -20 || {
-            echo "::warning::APK signature verification reported an issue"
-          }
-
-          ls -lh "$OUT"
-          echo "sha256=$(sha256sum "$OUT" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "size=$(du -h "$OUT" | cut -f1)" >> "$GITHUB_OUTPUT"
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            export SPECTRA_KEYSTORE="android/app/release.keystore"
+          fi
+          bash scripts/package-apk.sh "$SRC" "public/releases/spectrasweep-release.apk" \
+            | tee /tmp/package.log
+          echo "sha256=$(grep '^sha256=' /tmp/package.log | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          echo "size=$(grep '^size=' /tmp/package.log | cut -d= -f2)" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK as a workflow artifact
         uses: actions/upload-artifact@v4
