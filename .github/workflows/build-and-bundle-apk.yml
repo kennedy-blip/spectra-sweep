@@ -67,8 +67,11 @@ jobs:
           # from 3.1 MB to 5.8 MB on the second run. Strip it from dist/ before
           # the Capacitor sync; packaging re-writes public/releases afterwards.
           find dist -name '*.apk' -print -delete || true
-          if find dist android/app/src/main/assets -name '*.apk' 2>/dev/null | grep -q .; then
-            echo "::error::an APK is nested in the web bundle"
+          # Capture first, then test: piping into `grep -q` under pipefail makes
+          # the producer die of SIGPIPE (141) and fails the step spuriously.
+          NESTED="$(find dist android/app/src/main/assets -name '*.apk' 2>/dev/null || true)"
+          if [ -n "$NESTED" ]; then
+            echo "::error::an APK is nested in the web bundle: $NESTED"
             exit 1
           fi
           echo "No nested APK in the bundle"

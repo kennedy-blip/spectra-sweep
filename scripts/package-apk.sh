@@ -58,14 +58,26 @@ fi
 echo "signature verified"
 
 # 4. structural sanity
+#
+# Capture the entry list ONCE. Piping `unzip` into `grep -q` is broken under
+# `set -o pipefail`: grep -q exits at the first match, unzip then dies of
+# SIGPIPE (141), and pipefail reports that as the pipeline's status -- so the
+# check fails on a perfectly good package.
+ENTRIES="$(unzip -Z1 "$OUT")"
+
 for entry in classes.dex resources.arsc assets/public/index.html AndroidManifest.xml; do
-  unzip -l "$OUT" | grep -q "$entry" || { echo "ERROR: missing $entry" >&2; exit 1; }
+  if ! printf '%s\n' "$ENTRIES" | grep -qxF "$entry"; then
+    echo "ERROR: missing $entry" >&2
+    exit 1
+  fi
 done
+
 # No package may ship inside another package: a nested APK means the previous
 # release was picked up from public/releases during the web build.
-if unzip -l "$OUT" | grep -qE '\.apk$'; then
-  echo "ERROR: the APK contains a nested APK" >&2
-  unzip -l "$OUT" | grep -E '\.apk$' >&2
+NESTED="$(printf '%s\n' "$ENTRIES" | grep -E '\.apk$' || true)"
+if [ -n "$NESTED" ]; then
+  echo "ERROR: the APK contains a nested APK:" >&2
+  printf '%s\n' "$NESTED" >&2
   exit 1
 fi
 echo "structure verified (no nested package)"
