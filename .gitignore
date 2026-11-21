@@ -14,8 +14,13 @@ android/.gradle
 android/local.properties
 android/app/release.keystore
 android/keystore.properties
+android/app/src/main/assets/public
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+android/capacitor-cordova-android-plugins/build
 *.jks
 *.keystore
+local.properties
 
 # The signed APK is committed by CI into public/releases/ — keep it tracked.
 !public/releases/spectrasweep-release.apk
