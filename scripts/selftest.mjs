@@ -11,7 +11,12 @@ const read = (p) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
   assert.ok(src.includes('0x04034b50'), 'local file header signature');
   assert.ok(src.includes('0x02014b50'), 'central directory signature');
   assert.ok(src.includes('0x06054b50'), 'end-of-central-directory signature');
-  assert.ok(src.includes("type: 'application/vnd.android.package-archive'"), 'APK mime');
+  // The mime type moved into a shared constant, so assert the constant itself
+  // instead of a string literal that no longer appears in this form.
+  assert.ok(
+    /APK_MIME\s*=\s*'application\/vnd\.android\.package-archive'/.test(src),
+    'APK mime',
+  );
   assert.ok(src.includes('APK_FILENAME'), 'filename export');
 }
 
