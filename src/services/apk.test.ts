@@ -86,3 +86,14 @@ describe('downloadApk', () => {
     expect(APK_FILENAME).toBe('SpectraSweep-Privacy-v1.0.0.apk');
   });
 });
+
+describe('one-tap artifact link', () => {
+  it('exposes the exact filename the header anchor downloads as', () => {
+    // The header renders <a href={APK_PATH} download={APK_FILENAME}>, so these
+    // two constants are the whole one-tap contract. If either drifts the
+    // browser saves the file under a different name.
+    expect(APK_PATH).toBe('/releases/spectrasweep-release.apk');
+    expect(APK_FILENAME.endsWith('.apk')).toBe(true);
+    expect(APK_FILENAME).toContain('v1.0.0');
+  });
+});
