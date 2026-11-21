@@ -1,0 +1,14 @@
+{
+  "name": "SPECTRA-SWEEP — Counter-Surveillance Field Console",
+  "short_name": "SpectraSweep",
+  "description": "Optical pinhole glint scanner, 18–22 kHz ultrasonic beacon interceptor, EMF bug sweeper and travel privacy auditor.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#05070D",
+  "theme_color": "#070B14",
+  "categories": ["utilities", "security", "travel"],
+  "icons": [
+    { "src": "/spectra.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

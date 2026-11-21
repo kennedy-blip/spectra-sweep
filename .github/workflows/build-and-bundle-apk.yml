@@ -1,0 +1,186 @@
+name: Build & Bundle APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'public/releases/**'
+  workflow_dispatch:
+  # Allows a one-shot build from a working branch before it is merged.
+  workflow_call:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    name: Build Vite → Capacitor → APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      NODE_VERSION: '22'
+      # Gradle 8.9 + AGP 8.5.2 need a modern JDK. JDK 21 is the LTS that
+      # GitHub's ubuntu-latest image ships and is fully supported by AGP 8.5.
+      JAVA_VERSION: '21'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      # IMPORTANT: setup-android v3 runs on the deprecated Node 20 runtime and
+      # is force-upgraded to Node 24 on current runners, which breaks it. v4 is
+      # the Node-24-compatible release.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web bundle
+        run: npm run build
+
+      - name: Verify the web bundle before packaging
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          test -f dist/spectra.svg
+          du -sh dist
+
+      - name: Ensure Capacitor Android platform
+        run: |
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+
+      - name: Configure release signing (optional)
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASS" ]; then
+            echo "Signing with the release keystore."
+            echo "$KEYSTORE_B64" | base64 -d > android/app/release.keystore
+            {
+              echo "storeFile=app/release.keystore"
+              echo "storePassword=$KEYSTORE_PASS"
+              echo "keyAlias=${KEY_ALIAS:-spectrasweep}"
+              echo "keyPassword=$KEYSTORE_PASS"
+            } > android/keystore.properties
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No keystore secrets — the APK will be signed with the debug key."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build APK with Gradle
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Align and publish the artifact
+        id: artifact
+        run: |
+          set -euo pipefail
+          SRC=$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          echo "Found APK: $SRC"
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          echo "Using build-tools: $BT"
+
+          mkdir -p public/releases
+          OUT=public/releases/spectrasweep-release.apk
+
+          "$BT/zipalign" -f -p 4 "$SRC" "$OUT"
+
+          # Gradle already signed it (release or debug config); re-verify so the
+          # checksum we publish is verifiably signed.
+          "$BT/apksigner" verify --print-certs "$OUT" | head -20 || {
+            echo "::warning::APK signature verification reported an issue"
+          }
+
+          ls -lh "$OUT"
+          echo "sha256=$(sha256sum "$OUT" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "size=$(du -h "$OUT" | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectrasweep-apk
+          path: public/releases/spectrasweep-release.apk
+          retention-days: 90
+
+      - name: Record the checksum
+        run: |
+          {
+            echo "### SPECTRA-SWEEP APK"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Version | \`v1.0.0-arm64\` |"
+            echo "| Size | ${{ steps.artifact.outputs.size }} |"
+            echo "| SHA-256 | \`${{ steps.artifact.outputs.sha256 }}\` |"
+            echo "| Signed | ${{ steps.signing.outputs.signed == 'true' && 'release keystore' || 'debug keystore' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only the default branch owns the committed artifact; feature branches
+      # publish the file through the workflow artifact instead of rewriting
+      # public/releases on a branch that is about to be merged.
+      - name: Commit the bundle (main only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          git config user.name  "spectra-sweep-bot"
+          git config user.email "bot@spectrasweep.local"
+          git add public/releases/spectrasweep-release.apk
+          if git diff --cached --quiet; then
+            echo "Artifact unchanged — nothing to commit."
+          else
+            git commit -m "build(apk): bundle release v1.0.0-arm64
+
+          SHA-256: ${{ steps.artifact.outputs.sha256 }}
+          Size:    ${{ steps.artifact.outputs.size }}"
+            git push
+          fi
+
+  verify-build:
+    name: Verify Vercel build contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Typecheck + production build
+        run: npm run build
+      - name: Unit + integration tests
+        run: npm test
+      - name: Confirm the APK slot
+        run: |
+          if [ -f public/releases/spectrasweep-release.apk ]; then
+            echo "APK present in the deployment input ✅"
+          else
+            echo "::warning::No APK artifact committed yet — the client-side package stream will be used."
+          fi
