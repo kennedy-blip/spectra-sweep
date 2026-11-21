@@ -10,7 +10,36 @@
 export const APK_PATH = '/releases/spectrasweep-release.apk';
 export const APK_FILENAME = 'SpectraSweep-Privacy-v1.0.0.apk';
 export const APK_VERSION = 'v1.0.0-arm64';
-export const APK_SIZE_HINT = '9.4 MB';
+/**
+ * Display-only fallback size. The real byte size is read from the served
+ * artifact at runtime (see `measureApk`); this is only shown when the probe
+ * cannot reach the file, so it never claims a size the package does not have.
+ */
+export const APK_SIZE_HINT = 'measuring\u2026';
+
+/** Human-readable byte size, e.g. 5.8 MB. */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return APK_SIZE_HINT;
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/**
+ * Read the true size of the published artifact. Returns null when the file is
+ * unavailable, so callers fall back instead of inventing a number.
+ */
+export async function measureApk(): Promise<number | null> {
+  try {
+    const res = await fetch(APK_PATH, { method: 'HEAD' });
+    if (!res.ok) return null;
+    const ct = res.headers.get('content-type') ?? '';
+    if (ct.includes('text/html')) return null;
+    const len = Number(res.headers.get('content-length'));
+    return Number.isFinite(len) && len > 0 ? len : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Locally reproducible SHA-256 of the fallback container contents. */
 export const FALLBACK_SHA256 =
