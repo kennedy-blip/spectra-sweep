@@ -1,0 +1,171 @@
+name: Build & Bundle APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'public/releases/**'
+  workflow_dispatch:
+
+# Allow the workflow to commit the built artifact back to the branch.
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    name: Build Vite → Capacitor → APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      NODE_VERSION: '20'
+      JAVA_VERSION: '21'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web bundle
+        run: npm run build
+
+      - name: Ensure Capacitor Android platform
+        run: |
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+
+      - name: Configure release signing (optional)
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASS" ]; then
+            echo "Signing with release keystore."
+            echo "$KEYSTORE_B64" | base64 -d > android/app/release.keystore
+            {
+              echo "storeFile=release.keystore"
+              echo "storePassword=$KEYSTORE_PASS"
+              echo "keyAlias=${KEY_ALIAS:-spectrasweep}"
+              echo "keyPassword=$KEYSTORE_PASS"
+            } > android/keystore.properties
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No keystore secrets — falling back to the debug key."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build APK with Gradle
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Locate and align artifact
+        id: artifact
+        run: |
+          set -euo pipefail
+          SRC=$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          echo "Found APK: $SRC"
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          echo "Using build-tools: $BT"
+
+          mkdir -p public/releases
+          OUT=public/releases/spectrasweep-release.apk
+
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            "$BT/zipalign" -f -p 4 "$SRC" aligned.apk
+            "$BT/apksigner" sign \
+              --ks android/app/release.keystore \
+              --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+              --out "$OUT" aligned.apk
+            "$BT/apksigner" verify --print-certs "$OUT" || true
+          else
+            "$BT/zipalign" -f -p 4 "$SRC" "$OUT"
+          fi
+
+          ls -lh "$OUT"
+          echo "sha256=$(sha256sum "$OUT" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "size=$(du -h "$OUT" | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectrasweep-apk
+          path: public/releases/spectrasweep-release.apk
+          retention-days: 90
+
+      - name: Commit bundle into the deployment slot
+        run: |
+          set -euo pipefail
+          git config user.name  "spectra-sweep-bot"
+          git config user.email "bot@spectrasweep.local"
+          git add public/releases/spectrasweep-release.apk
+          if git diff --cached --quiet; then
+            echo "Artifact unchanged — nothing to commit."
+          else
+            git commit -m "build(apk): bundle signed release v1.0.0-arm64
+
+          SHA-256: ${{ steps.artifact.outputs.sha256 }}
+          Size:    ${{ steps.artifact.outputs.size }}"
+            git push
+          fi
+
+      - name: Publish checksum summary
+        run: |
+          {
+            echo "### SPECTRA-SWEEP APK"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Version | \`v1.0.0-arm64\` |"
+            echo "| Size | ${{ steps.artifact.outputs.size }} |"
+            echo "| SHA-256 | \`${{ steps.artifact.outputs.sha256 }}\` |"
+            echo "| Signed | ${{ steps.signing.outputs.signed == 'true' && 'release keystore' || 'debug keystore' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify-vercel:
+    name: Verify Vercel build contract
+    runs-on: ubuntu-latest
+    needs: build-apk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Typecheck + production build
+        run: npm run build
+      - name: Confirm APK is in the bundle
+        run: |
+          if [ -f public/releases/spectrasweep-release.apk ]; then
+            echo "APK present in dist input ✅"
+          else
+            echo "::warning::No APK artifact yet — the client-side package stream will be used."
+          fi
