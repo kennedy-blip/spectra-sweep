@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { APK_FILENAME, APK_PATH, APK_SIZE_HINT, APK_VERSION, FALLBACK_SHA256, downloadApk } from '../../services/apk';
+import { APK_FILENAME, APK_PATH, APK_SIZE_HINT, APK_VERSION, FALLBACK_SHA256, downloadApk, formatBytes, measureApk } from '../../services/apk';
 import { useApp } from '../../state/store';
 import { QrCode } from '../QrCode';
 import { Glass, SectionLabel, SPRING } from '../ui/Glass';
@@ -23,7 +23,9 @@ export function ApkModal() {
   const [downloading, setDownloading] = useState(false);
   const [lastMode, setLastMode] = useState<'release' | 'fallback' | null>(null);
   const [sha, setSha] = useState(FALLBACK_SHA256);
+  const [size, setSize] = useState(APK_SIZE_HINT);
   const digestTried = useRef(false);
+  const cancelledRef = useRef(false);
 
   const installUrl =
     typeof window !== 'undefined' ? `${window.location.origin}${APK_PATH}` : APK_PATH;
@@ -34,7 +36,12 @@ export function ApkModal() {
     // fetch can re-enter on every render and the modal never settles.
     if (digestTried.current) return;
     digestTried.current = true;
-    let cancelled = false;
+
+    // Report the artifact's actual size rather than a hard-coded claim.
+    measureApk().then((bytes) => {
+      if (!cancelledRef.current && bytes) setSize(formatBytes(bytes));
+    });
+    cancelledRef.current = false;
 
     const timeout = (ms: number) =>
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms));
@@ -50,14 +57,14 @@ export function ApkModal() {
         const hex = Array.from(new Uint8Array(digest))
           .map((b) => b.toString(16).padStart(2, '0'))
           .join('');
-        if (!cancelled) setSha(hex);
+        if (!cancelledRef.current) setSha(hex);
       } catch {
         /* keep the documented fallback digest */
       }
     })();
 
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
     };
   }, []);
 
@@ -70,7 +77,7 @@ export function ApkModal() {
       title: res.mode === 'release' ? 'Release APK downloading' : 'Package stream prepared',
       detail:
         res.mode === 'release'
-          ? `${APK_FILENAME} · ${APK_SIZE_HINT}`
+          ? `${APK_FILENAME} · ${size}`
           : 'Signed release builds attach from the CI workflow; a valid container was streamed in the meantime.',
       tone: res.mode === 'release' ? 'ok' : 'info',
     });
@@ -110,7 +117,7 @@ export function ApkModal() {
               <span className="chip">
                 <WifiOff size={8} /> offline ready
               </span>
-              <span className="chip">{APK_SIZE_HINT}</span>
+              <span className="chip">{size}</span>
             </div>
           </div>
         </div>

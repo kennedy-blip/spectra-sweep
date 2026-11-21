@@ -61,7 +61,14 @@ echo "signature verified"
 for entry in classes.dex resources.arsc assets/public/index.html AndroidManifest.xml; do
   unzip -l "$OUT" | grep -q "$entry" || { echo "ERROR: missing $entry" >&2; exit 1; }
 done
-echo "structure verified"
+# No package may ship inside another package: a nested APK means the previous
+# release was picked up from public/releases during the web build.
+if unzip -l "$OUT" | grep -qE '\.apk$'; then
+  echo "ERROR: the APK contains a nested APK" >&2
+  unzip -l "$OUT" | grep -E '\.apk$' >&2
+  exit 1
+fi
+echo "structure verified (no nested package)"
 
 ls -lh "$OUT"
 echo "sha256=$(sha256sum "$OUT" | cut -d' ' -f1)"

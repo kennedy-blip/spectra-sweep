@@ -57,6 +57,22 @@ jobs:
       - name: Build web bundle
         run: npm run build
 
+      - name: Keep the published APK out of the web bundle
+        run: |
+          set -euo pipefail
+          # public/releases/spectrasweep-release.apk is committed so Vercel can
+          # serve the download. Vite copies public/ into dist/ verbatim and
+          # `cap copy` then copies dist/ into the Android assets, so the build
+          # would embed the PREVIOUS APK inside the new one -- the artifact grew
+          # from 3.1 MB to 5.8 MB on the second run. Strip it from dist/ before
+          # the Capacitor sync; packaging re-writes public/releases afterwards.
+          find dist -name '*.apk' -print -delete || true
+          if find dist android/app/src/main/assets -name '*.apk' 2>/dev/null | grep -q .; then
+            echo "::error::an APK is nested in the web bundle"
+            exit 1
+          fi
+          echo "No nested APK in the bundle"
+
       - name: Verify the web bundle before packaging
         run: |
           set -euo pipefail
